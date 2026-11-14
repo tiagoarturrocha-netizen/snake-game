@@ -61,6 +61,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private Chiptune chiptune;
     private TextToSpeech tts;
     private boolean ttsReady = false;
+    private int eaten = 0;
+    private boolean specialFood = false;
+
+    private final Paint paintFace = new Paint();
+    private final Paint paintHair = new Paint();
+    private final Paint paintEyeWhite = new Paint();
+    private final Paint paintPupil = new Paint();
+    private final Paint paintMouth = new Paint();
+    private final Paint paintBrow = new Paint();
 
     private float touchStartX, touchStartY;
 
@@ -85,6 +94,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         paintStem.setStyle(Paint.Style.STROKE);
         paintStem.setStrokeCap(Paint.Cap.ROUND);
         paintLeaf.setColor(Color.rgb(76, 158, 47));
+        paintFace.setColor(Color.rgb(247, 178, 106));
+        paintHair.setColor(Color.rgb(245, 215, 110));
+        paintEyeWhite.setColor(Color.WHITE);
+        paintPupil.setColor(Color.rgb(26, 42, 90));
+        paintMouth.setColor(Color.rgb(179, 84, 31));
+        paintMouth.setStyle(Paint.Style.STROKE);
+        paintMouth.setStrokeWidth(3f);
+        paintBrow.setColor(Color.rgb(245, 215, 110));
+        paintBrow.setStyle(Paint.Style.STROKE);
+        paintBrow.setStrokeWidth(4f);
+        paintBrow.setStrokeCap(Paint.Cap.ROUND);
 
         chiptune = new Chiptune();
 
@@ -114,6 +134,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             p = new Point(random.nextInt(COLS), random.nextInt(ROWS));
         } while (snake.contains(p));
         food = p;
+        specialFood = random.nextInt(100) < 15;
     }
 
     private void computeLayout(int width, int height) {
@@ -186,8 +207,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         snake.add(0, new Point(nx, ny));
         if (nx == food.x && ny == food.y) {
-            score++;
-            if (score % 5 == 0) saySixSeven();
+            if (specialFood) {
+                score += 3;
+                sayTrump();
+            } else {
+                score++;
+                eaten++;
+                if (eaten % 5 == 0) saySixSeven();
+            }
             spawnFood();
         } else {
             snake.remove(snake.size() - 1);
@@ -203,6 +230,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void saySixSeven() {
         if (ttsReady) {
             tts.speak("six seven", TextToSpeech.QUEUE_FLUSH, null, null);
+        }
+    }
+
+    private void sayTrump() {
+        if (ttsReady) {
+            tts.setSpeechRate(0.9f);
+            tts.setPitch(0.6f);
+            tts.speak("Make snake great again!", TextToSpeech.QUEUE_FLUSH, null, null);
         }
     }
 
@@ -235,13 +270,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
                 for (int i = snake.size() - 1; i >= 0; i--) {
                     Point p = snake.get(i);
-                    Paint paint = (i == 0) ? paintSnakeHead : paintSnake;
-                    float pad = cellSize * 0.08f;
-                    canvas.drawRoundRect(offsetX + p.x * cellSize + pad,
-                            offsetY + p.y * cellSize + pad,
-                            offsetX + (p.x + 1) * cellSize - pad,
-                            offsetY + (p.y + 1) * cellSize - pad,
-                            cellSize * 0.2f, cellSize * 0.2f, paint);
+                    if (i == 0) {
+                        drawTrumpHead(canvas, offsetX + p.x * cellSize + cellSize / 2f,
+                                offsetY + p.y * cellSize + cellSize / 2f, cellSize / 2.1f);
+                    } else {
+                        float pad = cellSize * 0.08f;
+                        canvas.drawRoundRect(offsetX + p.x * cellSize + pad,
+                                offsetY + p.y * cellSize + pad,
+                                offsetX + (p.x + 1) * cellSize - pad,
+                                offsetY + (p.y + 1) * cellSize - pad,
+                                cellSize * 0.2f, cellSize * 0.2f, paintSnake);
+                    }
                 }
 
                 paintText.setTextSize(w / 18f);
@@ -270,10 +309,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawApple(Canvas canvas, float cx, float cy, float r) {
-        paintApple.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.15f,
-                new int[]{Color.rgb(255, 123, 107), Color.rgb(232, 56, 44),
-                        Color.rgb(165, 30, 20), Color.rgb(110, 15, 8)},
-                new float[]{0f, 0.35f, 0.8f, 1f}, Shader.TileMode.CLAMP));
+        if (specialFood) {
+            paintApple.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.15f,
+                    new int[]{Color.rgb(255, 123, 107), Color.rgb(232, 56, 44),
+                            Color.rgb(165, 30, 20), Color.rgb(26, 63, 196),
+                            Color.rgb(10, 26, 110)},
+                    new float[]{0f, 0.35f, 0.49f, 0.51f, 1f}, Shader.TileMode.CLAMP));
+        } else {
+            paintApple.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.15f,
+                    new int[]{Color.rgb(255, 123, 107), Color.rgb(232, 56, 44),
+                            Color.rgb(165, 30, 20), Color.rgb(110, 15, 8)},
+                    new float[]{0f, 0.35f, 0.8f, 1f}, Shader.TileMode.CLAMP));
+        }
         canvas.drawCircle(cx, cy, r, paintApple);
         canvas.drawOval(cx - r * 0.55f, cy - r * 0.55f,
                 cx - r * 0.1f, cy - r * 0.3f, paintShine);
@@ -282,6 +329,23 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         canvas.rotate(30f, cx, cy);
         canvas.drawOval(cx + r * 0.05f, cy - r * 1.3f, cx + r * 0.75f, cy - r * 0.95f, paintLeaf);
         canvas.restore();
+    }
+
+    private void drawTrumpHead(Canvas canvas, float cx, float cy, float r) {
+        canvas.drawCircle(cx, cy, r, paintFace);
+        canvas.save();
+        canvas.rotate(-8f, cx, cy);
+        canvas.drawOval(cx - r * 1.05f, cy - r * 1.05f, cx + r * 1.05f, cy - r * 0.1f, paintHair);
+        canvas.restore();
+        canvas.drawOval(cx - r * 1.05f, cy - r * 0.95f, cx + r * 0.9f, cy - r * 0.35f, paintHair);
+        canvas.drawCircle(cx - r * 0.35f, cy - r * 0.05f, r * 0.22f, paintEyeWhite);
+        canvas.drawCircle(cx + r * 0.35f, cy - r * 0.05f, r * 0.22f, paintEyeWhite);
+        canvas.drawCircle(cx - r * 0.35f, cy - r * 0.05f, r * 0.1f, paintPupil);
+        canvas.drawCircle(cx + r * 0.35f, cy - r * 0.05f, r * 0.1f, paintPupil);
+        canvas.drawLine(cx - r * 0.6f, cy - r * 0.45f, cx - r * 0.12f, cy - r * 0.3f, paintBrow);
+        canvas.drawLine(cx + r * 0.12f, cy - r * 0.3f, cx + r * 0.6f, cy - r * 0.45f, paintBrow);
+        canvas.drawArc(cx - r * 0.4f, cy + r * 0.1f, cx + r * 0.4f, cy + r * 0.7f,
+                20f, 140f, false, paintMouth);
     }
 
     @Override
