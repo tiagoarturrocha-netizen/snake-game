@@ -1,0 +1,260 @@
+package com.example.snakegame;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Point;
+import android.graphics.Typeface;
+import android.view.MotionEvent;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+
+import java.util.ArrayList;
+import java.util.Random;
+
+public class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
+
+    private static final int COLS = 20;
+    private static final int ROWS = 20;
+    private static final long TICK_MS = 120;
+
+    private Thread thread;
+    private volatile boolean running;
+    private final Object lock = new Object();
+
+    private final ArrayList<Point> snake = new ArrayList<>();
+    private Point dir = new Point(1, 0);
+    private Point pendingDir = new Point(1, 0);
+    private Point food = new Point();
+    private final Random random = new Random();
+
+    private int score = 0;
+    private int best = 0;
+    private boolean gameOver = false;
+    private boolean started = false;
+
+    private int cellSize;
+    private int offsetX;
+    private int offsetY;
+
+    private final Paint paintSnake = new Paint();
+    private final Paint paintSnakeHead = new Paint();
+    private final Paint paintFood = new Paint();
+    private final Paint paintBg = new Paint();
+    private final Paint paintGrid = new Paint();
+    private final Paint paintText = new Paint();
+    private final Paint paintDim = new Paint();
+
+    private float touchStartX, touchStartY;
+
+    public GameView(Context context) {
+        super(context);
+        getHolder().addCallback(this);
+
+        paintSnake.setColor(Color.rgb(76, 175, 80));
+        paintSnakeHead.setColor(Color.rgb(139, 195, 74));
+        paintFood.setColor(Color.rgb(244, 67, 54));
+        paintBg.setColor(Color.rgb(18, 18, 22));
+        paintGrid.setColor(Color.rgb(30, 30, 36));
+        paintDim.setColor(Color.argb(180, 0, 0, 0));
+        paintText.setColor(Color.WHITE);
+        paintText.setTextAlign(Paint.Align.CENTER);
+        paintText.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+
+        resetGame();
+    }
+
+    private void resetGame() {
+        snake.clear();
+        int midY = ROWS / 2;
+        snake.add(new Point(5, midY));
+        snake.add(new Point(4, midY));
+        snake.add(new Point(3, midY));
+        dir = new Point(1, 0);
+        pendingDir = new Point(1, 0);
+        score = 0;
+        gameOver = false;
+        started = false;
+        spawnFood();
+    }
+
+    private void spawnFood() {
+        Point p;
+        do {
+            p = new Point(random.nextInt(COLS), random.nextInt(ROWS));
+        } while (snake.contains(p));
+        food = p;
+    }
+
+    private void computeLayout(int width, int height) {
+        cellSize = Math.min(width / COLS, height / ROWS);
+        offsetX = (width - cellSize * COLS) / 2;
+        offsetY = (height - cellSize * ROWS) / 2;
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        running = true;
+        thread = new Thread(this);
+        thread.start();
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        computeLayout(width, height);
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        running = false;
+        if (thread != null) {
+            try {
+                thread.join();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    @Override
+    public void run() {
+        long last = System.currentTimeMillis();
+        while (running) {
+            long now = System.currentTimeMillis();
+            if (started && !gameOver && now - last >= TICK_MS) {
+                last = now;
+                synchronized (lock) {
+                    update();
+                }
+            }
+            draw();
+            try {
+                Thread.sleep(16);
+            } catch (InterruptedException ignored) {
+                return;
+            }
+        }
+    }
+
+    private void update() {
+        dir = pendingDir;
+        Point head = snake.get(0);
+        int nx = head.x + dir.x;
+        int ny = head.y + dir.y;
+
+        if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) {
+            endGame();
+            return;
+        }
+        for (Point p : snake) {
+            if (p.x == nx && p.y == ny) {
+                endGame();
+                return;
+            }
+        }
+
+        snake.add(0, new Point(nx, ny));
+        if (nx == food.x && ny == food.y) {
+            score++;
+            spawnFood();
+        } else {
+            snake.remove(snake.size() - 1);
+        }
+    }
+
+    private void endGame() {
+        gameOver = true;
+        if (score > best) best = score;
+    }
+
+    private void draw() {
+        SurfaceHolder holder = getHolder();
+        Canvas canvas = holder.lockCanvas();
+        if (canvas == null) return;
+        try {
+            synchronized (lock) {
+                int w = canvas.getWidth();
+                int h = canvas.getHeight();
+                canvas.drawColor(paintBg.getColor());
+
+                for (int x = 0; x < COLS; x++) {
+                    for (int y = 0; y < ROWS; y++) {
+                        if ((x + y) % 2 == 0) {
+                            canvas.drawRect(offsetX + x * cellSize, offsetY + y * cellSize,
+                                    offsetX + (x + 1) * cellSize, offsetY + (y + 1) * cellSize,
+                                    paintGrid);
+                        }
+                    }
+                }
+
+                canvas.drawCircle(offsetX + food.x * cellSize + cellSize / 2f,
+                        offsetY + food.y * cellSize + cellSize / 2f,
+                        cellSize / 2.6f, paintFood);
+
+                for (int i = snake.size() - 1; i >= 0; i--) {
+                    Point p = snake.get(i);
+                    Paint paint = (i == 0) ? paintSnakeHead : paintSnake;
+                    float pad = cellSize * 0.08f;
+                    canvas.drawRoundRect(offsetX + p.x * cellSize + pad,
+                            offsetY + p.y * cellSize + pad,
+                            offsetX + (p.x + 1) * cellSize - pad,
+                            offsetY + (p.y + 1) * cellSize - pad,
+                            cellSize * 0.2f, cellSize * 0.2f, paint);
+                }
+
+                paintText.setTextSize(w / 18f);
+                canvas.drawText(String.valueOf(score), w / 2f, offsetY * 0.5f, paintText);
+                paintText.setTextSize(w / 40f);
+                canvas.drawText("Recorde: " + best, w / 2f, offsetY * 0.5f + w / 22f, paintText);
+
+                if (!started) {
+                    canvas.drawRect(0, 0, w, h, paintDim);
+                    paintText.setTextSize(w / 15f);
+                    canvas.drawText("SNAKE", w / 2f, h / 2f - w / 20f, paintText);
+                    paintText.setTextSize(w / 28f);
+                    canvas.drawText("Deslize para mover · Toque para começar", w / 2f, h / 2f + w / 15f, paintText);
+                } else if (gameOver) {
+                    canvas.drawRect(0, 0, w, h, paintDim);
+                    paintText.setTextSize(w / 15f);
+                    canvas.drawText("GAME OVER", w / 2f, h / 2f - w / 20f, paintText);
+                    paintText.setTextSize(w / 28f);
+                    canvas.drawText("Pontos: " + score, w / 2f, h / 2f + w / 30f, paintText);
+                    canvas.drawText("Toque para jogar de novo", w / 2f, h / 2f + w / 12f, paintText);
+                }
+            }
+        } finally {
+            holder.unlockCanvasAndPost(canvas);
+        }
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                touchStartX = event.getX();
+                touchStartY = event.getY();
+                return true;
+            case MotionEvent.ACTION_UP:
+                if (!started || gameOver) {
+                    if (gameOver) resetGame();
+                    started = true;
+                    return true;
+                }
+                float dx = event.getX() - touchStartX;
+                float dy = event.getY() - touchStartY;
+                if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return true;
+                Point nd;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    nd = new Point(dx > 0 ? 1 : -1, 0);
+                } else {
+                    nd = new Point(0, dy > 0 ? 1 : -1);
+                }
+                if (nd.x != -dir.x || nd.y != -dir.y) {
+                    pendingDir = nd;
+                }
+                return true;
+        }
+        return super.onTouchEvent(event);
+    }
+}
