@@ -84,11 +84,22 @@
     if (musicTimer) { clearTimeout(musicTimer); musicTimer = null; }
   }
 
+  var eaten = 0;
+
   function saySixSeven() {
     if (!window.speechSynthesis) return;
     var u = new SpeechSynthesisUtterance('six seven');
     u.lang = 'en-US';
     u.rate = 1;
+    speechSynthesis.speak(u);
+  }
+
+  function sayTrump() {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance('Make snake great again!');
+    u.lang = 'en-US';
+    u.rate = 0.95;
+    u.pitch = 0.6;
     speechSynthesis.speak(u);
   }
 
@@ -117,6 +128,7 @@
     var p;
     do { p = {x: rnd(COLS), y: rnd(ROWS)}; }
     while (snake.some(function (s) { return s.x === p.x && s.y === p.y; }));
+    p.special = Math.random() < 0.15;
     food = p;
   }
   function rnd(n) { return Math.floor(Math.random() * n); }
@@ -135,8 +147,13 @@
     }
     snake.unshift({x:nx, y:ny});
     if (nx === food.x && ny === food.y) {
-      score++; scoreEl.textContent = String(score);
-      if (score % 5 === 0) saySixSeven();
+      if (food.special) { score += 3; sayTrump(); }
+      else {
+        score++;
+        eaten++;
+        if (eaten % 5 === 0) saySixSeven();
+      }
+      scoreEl.textContent = String(score);
       spawnFood();
     } else {
       snake.pop();
@@ -154,12 +171,20 @@
     ctx.fill();
   }
 
-  function drawApple(cx, cy, r) {
+  function drawApple(cx, cy, r, special) {
     var g = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r * 1.15);
-    g.addColorStop(0, '#ff7b6b');
-    g.addColorStop(0.35, '#e8382c');
-    g.addColorStop(0.8, '#a51e14');
-    g.addColorStop(1, '#6e0f08');
+    if (special) {
+      g.addColorStop(0, '#ff7b6b');
+      g.addColorStop(0.35, '#e8382c');
+      g.addColorStop(0.49, '#a51e14');
+      g.addColorStop(0.51, '#1a3fc4');
+      g.addColorStop(1, '#0a1a6e');
+    } else {
+      g.addColorStop(0, '#ff7b6b');
+      g.addColorStop(0.35, '#e8382c');
+      g.addColorStop(0.8, '#a51e14');
+      g.addColorStop(1, '#6e0f08');
+    }
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -180,6 +205,46 @@
     ctx.fill();
   }
 
+  function drawTrumpHead(cx, cy, r) {
+    ctx.fillStyle = '#f7b26a';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f5d76e';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - r * 0.55, r * 1.05, r * 0.5, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx - r * 0.5, cy - r * 0.8, r * 0.55, r * 0.3, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + r * 0.45, cy - r * 0.75, r * 0.45, r * 0.25, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.35, cy - r * 0.05, r * 0.22, 0, Math.PI * 2);
+    ctx.arc(cx + r * 0.35, cy - r * 0.05, r * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a2a5a';
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.35, cy - r * 0.05, r * 0.1, 0, Math.PI * 2);
+    ctx.arc(cx + r * 0.35, cy - r * 0.05, r * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f5d76e';
+    ctx.lineWidth = r * 0.14;
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.6, cy - r * 0.38);
+    ctx.lineTo(cx - r * 0.12, cy - r * 0.3);
+    ctx.moveTo(cx + r * 0.12, cy - r * 0.3);
+    ctx.lineTo(cx + r * 0.6, cy - r * 0.38);
+    ctx.stroke();
+    ctx.strokeStyle = '#b3541f';
+    ctx.lineWidth = r * 0.12;
+    ctx.beginPath();
+    ctx.arc(cx, cy + r * 0.25, r * 0.4, 0.25 * Math.PI, 0.75 * Math.PI);
+    ctx.stroke();
+  }
+
   function draw() {
     var size = canvas.width;
     ctx.fillStyle = '#121216';
@@ -195,14 +260,18 @@
     ctx.lineWidth = 4;
     ctx.strokeRect(offsetX - 6, offsetY - 6, cell * COLS + 12, cell * ROWS + 12);
 
-    drawApple(offsetX + food.x * cell + cell / 2, offsetY + food.y * cell + cell / 2, cell / 2.5);
+    drawApple(offsetX + food.x * cell + cell / 2, offsetY + food.y * cell + cell / 2, cell / 2.5, food.special);
 
     for (var i = snake.length - 1; i >= 0; i--) {
       var p = snake[i];
-      ctx.fillStyle = i === 0 ? '#8bc34a' : '#4caf50';
-      var pad = cell * 0.08;
-      rr(offsetX + p.x * cell + pad, offsetY + p.y * cell + pad,
-         cell - 2 * pad, cell - 2 * pad, cell * 0.2);
+      if (i === 0) {
+        drawTrumpHead(offsetX + p.x * cell + cell / 2, offsetY + p.y * cell + cell / 2, cell / 2.1);
+      } else {
+        ctx.fillStyle = '#4caf50';
+        var pad = cell * 0.08;
+        rr(offsetX + p.x * cell + pad, offsetY + p.y * cell + pad,
+           cell - 2 * pad, cell - 2 * pad, cell * 0.2);
+      }
     }
 
     function center(txt, dy, fs) {
