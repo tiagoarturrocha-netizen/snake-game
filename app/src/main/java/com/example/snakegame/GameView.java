@@ -5,12 +5,19 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Point;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.media.AudioFormat;
+import android.media.AudioManager;
+import android.media.AudioTrack;
+import android.speech.tts.TextToSpeech;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Random;
 
 public class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
@@ -18,6 +25,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private static final int COLS = 20;
     private static final int ROWS = 20;
     private static final long TICK_MS = 120;
+    private static final int SAMPLE_RATE = 22050;
 
     private Thread thread;
     private volatile boolean running;
@@ -40,11 +48,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private final Paint paintSnake = new Paint();
     private final Paint paintSnakeHead = new Paint();
-    private final Paint paintFood = new Paint();
     private final Paint paintBg = new Paint();
     private final Paint paintGrid = new Paint();
+    private final Paint paintBorder = new Paint();
     private final Paint paintText = new Paint();
     private final Paint paintDim = new Paint();
+    private final Paint paintApple = new Paint();
+    private final Paint paintShine = new Paint();
+    private final Paint paintStem = new Paint();
+    private final Paint paintLeaf = new Paint();
+
+    private Chiptune chiptune;
+    private TextToSpeech tts;
+    private boolean ttsReady = false;
 
     private float touchStartX, touchStartY;
 
@@ -54,13 +70,26 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         paintSnake.setColor(Color.rgb(76, 175, 80));
         paintSnakeHead.setColor(Color.rgb(139, 195, 74));
-        paintFood.setColor(Color.rgb(244, 67, 54));
         paintBg.setColor(Color.rgb(18, 18, 22));
         paintGrid.setColor(Color.rgb(30, 30, 36));
+        paintBorder.setColor(Color.rgb(74, 74, 90));
+        paintBorder.setStyle(Paint.Style.STROKE);
+        paintBorder.setStrokeWidth(6f);
         paintDim.setColor(Color.argb(180, 0, 0, 0));
         paintText.setColor(Color.WHITE);
         paintText.setTextAlign(Paint.Align.CENTER);
         paintText.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        paintShine.setColor(Color.argb(140, 255, 255, 255));
+        paintStem.setColor(Color.rgb(91, 58, 30));
+        paintStem.setStrokeWidth(4f);
+        paintStem.setStyle(Paint.Style.STROKE);
+        paintStem.setStrokeCap(Paint.Cap.ROUND);
+        paintLeaf.setColor(Color.rgb(76, 158, 47));
+
+        chiptune = new Chiptune();
+
+        tts = new TextToSpeech(context, status -> ttsReady = status == TextToSpeech.SUCCESS);
+        tts.setLanguage(Locale.US);
 
         resetGame();
     }
@@ -88,7 +117,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void computeLayout(int width, int height) {
-        cellSize = Math.min(width / COLS, height / ROWS);
+        cellSize = Math.min((width - 12) / COLS, (height - 12) / ROWS);
         offsetX = (width - cellSize * COLS) / 2;
         offsetY = (height - cellSize * ROWS) / 2;
     }
@@ -108,6 +137,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         running = false;
+        chiptune.stop();
         if (thread != null) {
             try {
                 thread.join();
@@ -157,6 +187,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         snake.add(0, new Point(nx, ny));
         if (nx == food.x && ny == food.y) {
             score++;
+            if (score % 5 == 0) saySixSeven();
             spawnFood();
         } else {
             snake.remove(snake.size() - 1);
@@ -165,7 +196,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void endGame() {
         gameOver = true;
+        chiptune.stop();
         if (score > best) best = score;
+    }
+
+    private void saySixSeven() {
+        if (ttsReady) {
+            tts.speak("six seven", TextToSpeech.QUEUE_FLUSH, null, null);
+        }
     }
 
     private void draw() {
@@ -188,9 +226,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     }
                 }
 
-                canvas.drawCircle(offsetX + food.x * cellSize + cellSize / 2f,
-                        offsetY + food.y * cellSize + cellSize / 2f,
-                        cellSize / 2.6f, paintFood);
+                canvas.drawRect(offsetX - 9f, offsetY - 9f,
+                        offsetX + COLS * cellSize + 9f, offsetY + ROWS * cellSize + 9f,
+                        paintBorder);
+
+                drawApple(canvas, offsetX + food.x * cellSize + cellSize / 2f,
+                        offsetY + food.y * cellSize + cellSize / 2f, cellSize / 2.5f);
 
                 for (int i = snake.size() - 1; i >= 0; i--) {
                     Point p = snake.get(i);
@@ -216,8 +257,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     canvas.drawText("Deslize para mover · Toque para começar", w / 2f, h / 2f + w / 15f, paintText);
                 } else if (gameOver) {
                     canvas.drawRect(0, 0, w, h, paintDim);
-                    paintText.setTextSize(w / 15f);
-                    canvas.drawText("GAME OVER", w / 2f, h / 2f - w / 20f, paintText);
+                    paintText.setTextSize(w / 18f);
+                    canvas.drawText("Perdeu miserável!", w / 2f, h / 2f - w / 20f, paintText);
                     paintText.setTextSize(w / 28f);
                     canvas.drawText("Pontos: " + score, w / 2f, h / 2f + w / 30f, paintText);
                     canvas.drawText("Toque para jogar de novo", w / 2f, h / 2f + w / 12f, paintText);
@@ -226,6 +267,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         } finally {
             holder.unlockCanvasAndPost(canvas);
         }
+    }
+
+    private void drawApple(Canvas canvas, float cx, float cy, float r) {
+        paintApple.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.15f,
+                new int[]{Color.rgb(255, 123, 107), Color.rgb(232, 56, 44),
+                        Color.rgb(165, 30, 20), Color.rgb(110, 15, 8)},
+                new float[]{0f, 0.35f, 0.8f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawCircle(cx, cy, r, paintApple);
+        canvas.drawOval(cx - r * 0.55f, cy - r * 0.55f,
+                cx - r * 0.1f, cy - r * 0.3f, paintShine);
+        canvas.drawLine(cx, cy - r * 0.85f, cx + r * 0.05f, cy - r * 1.45f, paintStem);
+        canvas.save();
+        canvas.rotate(30f, cx, cy);
+        canvas.drawOval(cx + r * 0.05f, cy - r * 1.3f, cx + r * 0.75f, cy - r * 0.95f, paintLeaf);
+        canvas.restore();
     }
 
     @Override
@@ -239,6 +295,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 if (!started || gameOver) {
                     if (gameOver) resetGame();
                     started = true;
+                    chiptune.start();
                     return true;
                 }
                 float dx = event.getX() - touchStartX;
@@ -256,5 +313,69 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    private static class Chiptune implements Runnable {
+
+        private static final float[][] MELODY = {
+                {659.25f, 1}, {493.88f, .5f}, {523.25f, .5f}, {587.33f, 1}, {523.25f, .5f}, {493.88f, .5f},
+                {440f, 1}, {440f, .5f}, {523.25f, .5f}, {659.25f, 1}, {587.33f, .5f}, {523.25f, .5f},
+                {493.88f, 1.5f}, {523.25f, .5f}, {587.33f, 1}, {659.25f, 1}, {523.25f, 1}, {440f, 1}, {440f, 2},
+                {0f, .5f}, {587.33f, 1}, {698.46f, .5f}, {880f, 1}, {783.99f, .5f}, {698.46f, .5f},
+                {659.25f, 1.5f}, {523.25f, .5f}, {659.25f, 1}, {587.33f, .5f}, {523.25f, .5f},
+                {493.88f, 1}, {493.88f, .5f}, {523.25f, .5f}, {587.33f, 1}, {659.25f, 1},
+                {523.25f, 1}, {440f, 1}, {440f, 2}, {0f, 1}
+        };
+        private static final float BEAT_SEC = 0.32f;
+
+        private AudioTrack track;
+        private Thread thread;
+        private volatile boolean playing;
+
+        void start() {
+            if (playing) return;
+            playing = true;
+            thread = new Thread(this);
+            thread.start();
+        }
+
+        void stop() {
+            playing = false;
+            if (thread != null) {
+                thread.interrupt();
+                thread = null;
+            }
+            if (track != null) {
+                track.stop();
+                track.release();
+                track = null;
+            }
+        }
+
+        @Override
+        public void run() {
+            int minBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            track = new AudioTrack(AudioManager.STREAM_MUSIC, SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                    Math.max(minBuf, 8192), AudioTrack.MODE_STREAM);
+            track.play();
+            int idx = 0;
+            while (playing) {
+                float[] note = MELODY[idx % MELODY.length];
+                idx++;
+                int samples = (int) (note[1] * BEAT_SEC * SAMPLE_RATE);
+                short[] buf = new short[samples];
+                if (note[0] > 0) {
+                    int period = Math.round(SAMPLE_RATE / note[0]);
+                    for (int i = 0; i < samples; i++) {
+                        boolean on = (i % period) < (period / 2);
+                        double env = 1.0 - (double) i / samples * 0.6;
+                        buf[i] = (short) (on ? 2600 * env : -2600 * env);
+                    }
+                }
+                if (track != null) track.write(buf, 0, samples);
+            }
+        }
     }
 }
