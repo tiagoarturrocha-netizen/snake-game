@@ -12,7 +12,7 @@
   #hud { text-align: center; padding: 10px 0 4px; }
   #score { font-size: 30px; font-weight: 700; line-height: 1.1; }
   #best { font-size: 14px; color: #9e9ea6; }
-  canvas { display: block; border-radius: 8px; }
+  canvas { display: block; }
 </style>
 </head>
 <body>
@@ -29,19 +29,78 @@
   var scoreEl = document.getElementById('score');
   var bestEl = document.getElementById('best');
 
-  var cell, offsetX, offsetY;
+  var cell, offsetX, offsetY, boardSize;
   var snake, dir, pendingDir, food, score, gameOver, started, lastTick = 0;
   var best = 0;
   try { best = parseInt(localStorage.getItem('snake_best') || '0', 10) || 0; } catch (e) {}
 
+  /* ---- Chiptune (Korobeiniki, domínio público) ---- */
+  var N = { A4: 440, B4: 493.88, C5: 523.25, D5: 587.33, E5: 659.25,
+            F5: 698.46, G5: 783.99, A5: 880 };
+  var MELODY = [
+    ['E5', 1], ['B4', .5], ['C5', .5], ['D5', 1], ['C5', .5], ['B4', .5],
+    ['A4', 1], ['A4', .5], ['C5', .5], ['E5', 1], ['D5', .5], ['C5', .5],
+    ['B4', 1.5], ['C5', .5], ['D5', 1], ['E5', 1], ['C5', 1], ['A4', 1], ['A4', 2],
+    [null, .5], ['D5', 1], ['F5', .5], ['A5', 1], ['G5', .5], ['F5', .5],
+    ['E5', 1.5], ['C5', .5], ['E5', 1], ['D5', .5], ['C5', .5],
+    ['B4', 1], ['B4', .5], ['C5', .5], ['D5', 1], ['E5', 1],
+    ['C5', 1], ['A4', 1], ['A4', 2], [null, 1]
+  ];
+  var audioCtx = null, musicTimer = null, noteIdx = 0, musicOn = false;
+
+  function playNote() {
+    if (!musicOn) return;
+    var note = MELODY[noteIdx % MELODY.length];
+    noteIdx++;
+    var dur = note[1] * 0.32;
+    if (note[0]) {
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = N[note[0]];
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur * 0.9);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + dur);
+    }
+    musicTimer = setTimeout(playNote, dur * 1000);
+  }
+
+  function startMusic() {
+    if (musicOn) return;
+    if (!audioCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    musicOn = true;
+    playNote();
+  }
+
+  function stopMusic() {
+    musicOn = false;
+    if (musicTimer) { clearTimeout(musicTimer); musicTimer = null; }
+  }
+
+  function saySixSeven() {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance('six seven');
+    u.lang = 'en-US';
+    u.rate = 1;
+    speechSynthesis.speak(u);
+  }
+
+  /* ---- Jogo ---- */
   function resize() {
     var w = window.innerWidth, h = window.innerHeight;
     var hudH = document.getElementById('hud').offsetHeight;
-    var size = Math.min(w - 16, h - hudH - 16, 560);
-    canvas.width = canvas.height = size;
-    cell = Math.floor(size / COLS);
-    offsetX = Math.floor((size - cell * COLS) / 2);
-    offsetY = Math.floor((size - cell * ROWS) / 2);
+    boardSize = Math.min(w - 16, h - hudH - 16, 560);
+    canvas.width = canvas.height = boardSize;
+    cell = Math.floor((boardSize - 12) / COLS);
+    offsetX = Math.floor((boardSize - cell * COLS) / 2);
+    offsetY = Math.floor((boardSize - cell * ROWS) / 2);
   }
   window.addEventListener('resize', resize);
 
@@ -69,13 +128,16 @@
     if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS ||
         snake.some(function (s) { return s.x === nx && s.y === ny; })) {
       gameOver = true;
+      stopMusic();
       if (score > best) { best = score; bestEl.textContent = 'Recorde: ' + best;
         try { localStorage.setItem('snake_best', String(best)); } catch (e) {} }
       return;
     }
     snake.unshift({x:nx, y:ny});
     if (nx === food.x && ny === food.y) {
-      score++; scoreEl.textContent = String(score); spawnFood();
+      score++; scoreEl.textContent = String(score);
+      if (score % 5 === 0) saySixSeven();
+      spawnFood();
     } else {
       snake.pop();
     }
@@ -92,6 +154,32 @@
     ctx.fill();
   }
 
+  function drawApple(cx, cy, r) {
+    var g = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r * 1.15);
+    g.addColorStop(0, '#ff7b6b');
+    g.addColorStop(0.35, '#e8382c');
+    g.addColorStop(0.8, '#a51e14');
+    g.addColorStop(1, '#6e0f08');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(cx - r * 0.35, cy - r * 0.45, r * 0.22, r * 0.13, -0.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#5b3a1e';
+    ctx.lineWidth = Math.max(2, r * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r * 0.85);
+    ctx.quadraticCurveTo(cx + r * 0.1, cy - r * 1.25, cx + r * 0.05, cy - r * 1.45);
+    ctx.stroke();
+    ctx.fillStyle = '#4c9e2f';
+    ctx.beginPath();
+    ctx.ellipse(cx + r * 0.35, cy - r * 1.1, r * 0.38, r * 0.18, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function draw() {
     var size = canvas.width;
     ctx.fillStyle = '#121216';
@@ -103,11 +191,11 @@
         if ((x + y) % 2 === 0)
           ctx.fillRect(offsetX + x * cell, offsetY + y * cell, cell, cell);
 
-    ctx.fillStyle = '#f44336';
-    ctx.beginPath();
-    ctx.arc(offsetX + food.x * cell + cell / 2, offsetY + food.y * cell + cell / 2,
-            cell / 2.6, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.strokeStyle = '#4a4a5a';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(offsetX - 6, offsetY - 6, cell * COLS + 12, cell * ROWS + 12);
+
+    drawApple(offsetX + food.x * cell + cell / 2, offsetY + food.y * cell + cell / 2, cell / 2.5);
 
     for (var i = snake.length - 1; i >= 0; i--) {
       var p = snake[i];
@@ -134,7 +222,7 @@
     } else if (gameOver) {
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
       ctx.fillRect(0, 0, size, size);
-      center('GAME OVER', -size / 20, size / 15);
+      center('Perdeu miserável!', -size / 20, size / 18);
       ctx.font = size / 28 + 'px system-ui, sans-serif';
       ctx.fillStyle = '#9e9ea6';
       ctx.fillText('Pontos: ' + score, size / 2, size / 2 + size / 30);
@@ -159,6 +247,7 @@
     if (!started || gameOver) {
       if (gameOver) reset();
       started = true;
+      startMusic();
     }
   }
 
