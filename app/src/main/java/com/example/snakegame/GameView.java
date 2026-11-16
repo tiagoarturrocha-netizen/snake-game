@@ -4,20 +4,17 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Point;
-import android.graphics.RadialGradient;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
-import android.speech.tts.TextToSpeech;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 import java.util.ArrayList;
-import java.util.Locale;
 import java.util.Random;
 
 public class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
@@ -47,29 +44,24 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private int offsetY;
 
     private final Paint paintSnake = new Paint();
-    private final Paint paintSnakeHead = new Paint();
     private final Paint paintBg = new Paint();
     private final Paint paintGrid = new Paint();
     private final Paint paintBorder = new Paint();
     private final Paint paintText = new Paint();
     private final Paint paintDim = new Paint();
-    private final Paint paintApple = new Paint();
-    private final Paint paintShine = new Paint();
-    private final Paint paintStem = new Paint();
-    private final Paint paintLeaf = new Paint();
-
-    private Chiptune chiptune;
-    private TextToSpeech tts;
-    private boolean ttsReady = false;
-    private int eaten = 0;
-    private boolean specialFood = false;
-
+    private final Paint paintGold = new Paint();
+    private final Paint paintBlue = new Paint();
+    private final Paint paintHat = new Paint();
+    private final Paint paintStar = new Paint();
     private final Paint paintFace = new Paint();
     private final Paint paintHair = new Paint();
     private final Paint paintEyeWhite = new Paint();
     private final Paint paintPupil = new Paint();
     private final Paint paintMouth = new Paint();
     private final Paint paintBrow = new Paint();
+
+    private Chiptune chiptune;
+    private boolean specialFood = false;
 
     private float touchStartX, touchStartY;
 
@@ -78,7 +70,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         getHolder().addCallback(this);
 
         paintSnake.setColor(Color.rgb(76, 175, 80));
-        paintSnakeHead.setColor(Color.rgb(139, 195, 74));
         paintBg.setColor(Color.rgb(18, 18, 22));
         paintGrid.setColor(Color.rgb(30, 30, 36));
         paintBorder.setColor(Color.rgb(74, 74, 90));
@@ -88,12 +79,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         paintText.setColor(Color.WHITE);
         paintText.setTextAlign(Paint.Align.CENTER);
         paintText.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        paintShine.setColor(Color.argb(140, 255, 255, 255));
-        paintStem.setColor(Color.rgb(91, 58, 30));
-        paintStem.setStrokeWidth(4f);
-        paintStem.setStyle(Paint.Style.STROKE);
-        paintStem.setStrokeCap(Paint.Cap.ROUND);
-        paintLeaf.setColor(Color.rgb(76, 158, 47));
+        paintGold.setColor(Color.rgb(255, 213, 79));
+        paintGold.setStrokeCap(Paint.Cap.ROUND);
+        paintBlue.setColor(Color.rgb(26, 63, 196));
+        paintBlue.setStrokeCap(Paint.Cap.ROUND);
+        paintHat.setColor(Color.rgb(107, 107, 120));
+        paintStar.setColor(Color.rgb(211, 47, 47));
         paintFace.setColor(Color.rgb(247, 178, 106));
         paintHair.setColor(Color.rgb(245, 215, 110));
         paintEyeWhite.setColor(Color.WHITE);
@@ -107,9 +98,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         paintBrow.setStrokeCap(Paint.Cap.ROUND);
 
         chiptune = new Chiptune();
-
-        tts = new TextToSpeech(context, status -> ttsReady = status == TextToSpeech.SUCCESS);
-        tts.setLanguage(Locale.US);
 
         resetGame();
     }
@@ -207,14 +195,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         snake.add(0, new Point(nx, ny));
         if (nx == food.x && ny == food.y) {
-            if (specialFood) {
-                score += 3;
-                sayTrump();
-            } else {
-                score++;
-                eaten++;
-                if (eaten % 5 == 0) saySixSeven();
-            }
+            score += specialFood ? 3 : 1;
             spawnFood();
         } else {
             snake.remove(snake.size() - 1);
@@ -225,20 +206,6 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         gameOver = true;
         chiptune.stop();
         if (score > best) best = score;
-    }
-
-    private void saySixSeven() {
-        if (ttsReady) {
-            tts.speak("six seven", TextToSpeech.QUEUE_FLUSH, null, null);
-        }
-    }
-
-    private void sayTrump() {
-        if (ttsReady) {
-            tts.setSpeechRate(0.9f);
-            tts.setPitch(0.6f);
-            tts.speak("Make snake great again!", TextToSpeech.QUEUE_FLUSH, null, null);
-        }
     }
 
     private void draw() {
@@ -265,8 +232,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                         offsetX + COLS * cellSize + 9f, offsetY + ROWS * cellSize + 9f,
                         paintBorder);
 
-                drawApple(canvas, offsetX + food.x * cellSize + cellSize / 2f,
-                        offsetY + food.y * cellSize + cellSize / 2f, cellSize / 2.5f);
+                drawHammerSickle(canvas, offsetX + food.x * cellSize + cellSize / 2f,
+                        offsetY + food.y * cellSize + cellSize / 2f, cellSize / 2.3f);
 
                 for (int i = snake.size() - 1; i >= 0; i--) {
                     Point p = snake.get(i);
@@ -308,26 +275,23 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
     }
 
-    private void drawApple(Canvas canvas, float cx, float cy, float r) {
-        if (specialFood) {
-            paintApple.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.15f,
-                    new int[]{Color.rgb(255, 123, 107), Color.rgb(232, 56, 44),
-                            Color.rgb(165, 30, 20), Color.rgb(26, 63, 196),
-                            Color.rgb(10, 26, 110)},
-                    new float[]{0f, 0.35f, 0.49f, 0.51f, 1f}, Shader.TileMode.CLAMP));
-        } else {
-            paintApple.setShader(new RadialGradient(cx - r * 0.35f, cy - r * 0.4f, r * 1.15f,
-                    new int[]{Color.rgb(255, 123, 107), Color.rgb(232, 56, 44),
-                            Color.rgb(165, 30, 20), Color.rgb(110, 15, 8)},
-                    new float[]{0f, 0.35f, 0.8f, 1f}, Shader.TileMode.CLAMP));
-        }
-        canvas.drawCircle(cx, cy, r, paintApple);
-        canvas.drawOval(cx - r * 0.55f, cy - r * 0.55f,
-                cx - r * 0.1f, cy - r * 0.3f, paintShine);
-        canvas.drawLine(cx, cy - r * 0.85f, cx + r * 0.05f, cy - r * 1.45f, paintStem);
+    private void drawHammerSickle(Canvas canvas, float cx, float cy, float r) {
+        Paint gold = specialFood ? paintStar : paintGold;
+        Paint tool = specialFood ? paintBlue : paintGold;
+        Paint strokeGold = new Paint(gold);
+        strokeGold.setStyle(Paint.Style.STROKE);
+        strokeGold.setStrokeWidth(r * 0.28f);
+        Paint strokeTool = new Paint(tool);
+        strokeTool.setStyle(Paint.Style.STROKE);
+        strokeTool.setStrokeWidth(r * 0.28f);
+        canvas.drawArc(cx - r * 0.8f, cy - r * 0.85f, cx + r * 0.6f, cy + r * 0.55f,
+                -6f, 154f, false, strokeGold);
+        canvas.drawLine(cx + r * 0.45f, cy + r * 0.4f, cx + r * 0.05f, cy + r * 0.85f, strokeGold);
+        canvas.drawLine(cx - r * 0.7f, cy + r * 0.6f, cx - r * 0.1f, cy - r * 0.1f, strokeTool);
         canvas.save();
-        canvas.rotate(30f, cx, cy);
-        canvas.drawOval(cx + r * 0.05f, cy - r * 1.3f, cx + r * 0.75f, cy - r * 0.95f, paintLeaf);
+        canvas.translate(cx - r * 0.15f, cy - r * 0.25f);
+        canvas.rotate(-45f);
+        canvas.drawRect(-r * 0.5f, -r * 0.18f, r * 0.5f, r * 0.18f, tool);
         canvas.restore();
     }
 
@@ -346,6 +310,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         canvas.drawLine(cx + r * 0.12f, cy - r * 0.3f, cx + r * 0.6f, cy - r * 0.45f, paintBrow);
         canvas.drawArc(cx - r * 0.4f, cy + r * 0.1f, cx + r * 0.4f, cy + r * 0.7f,
                 20f, 140f, false, paintMouth);
+        canvas.drawRoundRect(cx - r * 1.05f, cy - r * 0.95f, cx + r * 1.05f, cy - r * 0.4f,
+                r * 0.25f, r * 0.25f, paintHat);
+        canvas.drawRect(cx - r * 1.05f, cy - r * 0.6f, cx - r * 0.75f, cy + r * 0.15f, paintHat);
+        canvas.drawRect(cx + r * 0.75f, cy - r * 0.6f, cx + r * 1.05f, cy + r * 0.15f, paintHat);
+        Path star = new Path();
+        float scx = cx, scy = cy - r * 0.62f, R = r * 0.22f;
+        for (int i = 0; i < 10; i++) {
+            double ang = -Math.PI / 2 + i * Math.PI / 5;
+            float rad = (i % 2 == 0) ? R : R * 0.45f;
+            float px = (float) (scx + rad * Math.cos(ang));
+            float py = (float) (scy + rad * Math.sin(ang));
+            if (i == 0) star.moveTo(px, py); else star.lineTo(px, py);
+        }
+        star.close();
+        canvas.drawPath(star, paintStar);
     }
 
     @Override
@@ -382,15 +361,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private static class Chiptune implements Runnable {
 
         private static final float[][] MELODY = {
-                {659.25f, 1}, {493.88f, .5f}, {523.25f, .5f}, {587.33f, 1}, {523.25f, .5f}, {493.88f, .5f},
-                {440f, 1}, {440f, .5f}, {523.25f, .5f}, {659.25f, 1}, {587.33f, .5f}, {523.25f, .5f},
-                {493.88f, 1.5f}, {523.25f, .5f}, {587.33f, 1}, {659.25f, 1}, {523.25f, 1}, {440f, 1}, {440f, 2},
-                {0f, .5f}, {587.33f, 1}, {698.46f, .5f}, {880f, 1}, {783.99f, .5f}, {698.46f, .5f},
-                {659.25f, 1.5f}, {523.25f, .5f}, {659.25f, 1}, {587.33f, .5f}, {523.25f, .5f},
-                {493.88f, 1}, {493.88f, .5f}, {523.25f, .5f}, {587.33f, 1}, {659.25f, 1},
-                {523.25f, 1}, {440f, 1}, {440f, 2}, {0f, 1}
+                {196f, .5f}, {261.63f, 1}, {261.63f, .5f}, {261.63f, .5f}, {293.66f, .5f}, {329.63f, 1},
+                {349.23f, .75f}, {329.63f, .25f}, {293.66f, 1}, {261.63f, .75f}, {246.94f, .25f}, {261.63f, 1},
+                {293.66f, 1}, {329.63f, 2}, {0f, .5f},
+                {349.23f, .5f}, {349.23f, .5f}, {329.63f, .5f}, {293.66f, .5f}, {261.63f, 1},
+                {293.66f, .5f}, {329.63f, .5f}, {349.23f, .5f}, {392f, 1},
+                {329.63f, .5f}, {261.63f, .5f}, {293.66f, 2}, {0f, .5f},
+                {196f, .5f}, {261.63f, 1}, {261.63f, .5f}, {261.63f, .5f}, {293.66f, .5f}, {329.63f, 1},
+                {349.23f, .75f}, {329.63f, .25f}, {293.66f, 1}, {261.63f, .75f}, {246.94f, .25f}, {261.63f, 1},
+                {261.63f, 2}, {0f, 1}
         };
-        private static final float BEAT_SEC = 0.32f;
+        private static final float BEAT_SEC = 0.38f;
 
         private AudioTrack track;
         private Thread thread;
