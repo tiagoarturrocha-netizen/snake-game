@@ -2,337 +2,429 @@
 <html lang="pt">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>Snake</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crime City</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: #121216; overflow: hidden; touch-action: none; }
-  body { display: flex; flex-direction: column; align-items: center;
-         font-family: system-ui, sans-serif; color: #fff; user-select: none; }
-  #hud { text-align: center; padding: 10px 0 4px; }
-  #score { font-size: 30px; font-weight: 700; line-height: 1.1; }
-  #best { font-size: 14px; color: #9e9ea6; }
+  html, body { height: 100%; background: #000; overflow: hidden; }
+  body { font-family: system-ui, sans-serif; color: #fff; user-select: none; }
   canvas { display: block; }
+  #help { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+          font-size: 12px; color: #9e9ea6; text-align: center; }
+  #help a { color: #7fb98a; }
 </style>
 </head>
 <body>
-  <div id="hud">
-    <div id="score">0</div>
-    <div id="best">Recorde: 0</div>
-  </div>
-  <canvas id="game"></canvas>
+<canvas id="game"></canvas>
+<div id="help">WASD mover/conduzir · E entrar/sair do carro · Espaço travão de mão · Objetivo: entregas amarelas · Evita a polícia<br><a href="snake.html">Jogar Snake →</a></div>
 <script>
 (function () {
-  var COLS = 20, ROWS = 20, TICK_MS = 120;
+  var TILE = 40, MAP = 48, VIEW = 480;
   var canvas = document.getElementById('game');
   var ctx = canvas.getContext('2d');
-  var scoreEl = document.getElementById('score');
-  var bestEl = document.getElementById('best');
-
-  var cell, offsetX, offsetY, boardSize;
-  var snake, dir, pendingDir, food, score, gameOver, started, lastTick = 0;
-  var best = 0;
-  try { best = parseInt(localStorage.getItem('snake_best') || '0', 10) || 0; } catch (e) {}
-
-  /* ---- Chiptune: Hino da URSS (melodia de Alexandrov) ---- */
-  var N = { G3: 196, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63,
-            F4: 349.23, G4: 392 };
-  var P1 = [
-    ['G3', .5], ['C4', 1], ['C4', .5], ['C4', .5], ['D4', .5], ['E4', 1],
-    ['F4', .75], ['E4', .25], ['D4', 1], ['C4', .75], ['B3', .25], ['C4', 1],
-    ['D4', 1], ['E4', 2], [null, .5]
-  ];
-  var P2 = [
-    ['F4', .5], ['F4', .5], ['E4', .5], ['D4', .5], ['C4', 1],
-    ['D4', .5], ['E4', .5], ['F4', .5], ['G4', 1],
-    ['E4', .5], ['C4', .5], ['D4', 2], [null, .5]
-  ];
-  var MELODY = P1.concat(P2, P1.slice(0, 12), [['C4', 2], [null, 1]]);
-  var audioCtx = null, musicTimer = null, noteIdx = 0, musicOn = false;
-
-  function playNote() {
-    if (!musicOn) return;
-    var note = MELODY[noteIdx % MELODY.length];
-    noteIdx++;
-    var dur = note[1] * 0.38;
-    if (note[0]) {
-      var osc = audioCtx.createOscillator();
-      var gain = audioCtx.createGain();
-      osc.type = 'square';
-      osc.frequency.value = N[note[0]];
-      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur * 0.9);
-      osc.connect(gain).connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + dur);
-    }
-    musicTimer = setTimeout(playNote, dur * 1000);
-  }
-
-  function startMusic() {
-    if (musicOn) return;
-    if (!audioCtx) {
-      var AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
-      audioCtx = new AC();
-    }
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    musicOn = true;
-    playNote();
-  }
-
-  function stopMusic() {
-    musicOn = false;
-    if (musicTimer) { clearTimeout(musicTimer); musicTimer = null; }
-  }
 
   function resize() {
-    var w = window.innerWidth, h = window.innerHeight;
-    var hudH = document.getElementById('hud').offsetHeight;
-    boardSize = Math.min(w - 16, h - hudH - 16, 560);
-    canvas.width = canvas.height = boardSize;
-    cell = Math.floor((boardSize - 12) / COLS);
-    offsetX = Math.floor((boardSize - cell * COLS) / 2);
-    offsetY = Math.floor((boardSize - cell * ROWS) / 2);
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
   }
   window.addEventListener('resize', resize);
+  resize();
 
-  function reset() {
-    var midY = Math.floor(ROWS / 2);
-    snake = [{x:5,y:midY},{x:4,y:midY},{x:3,y:midY}];
-    dir = {x:1,y:0}; pendingDir = {x:1,y:0};
-    score = 0; gameOver = false; started = false;
-    scoreEl.textContent = '0';
-    spawnFood();
+  /* ---- Mapa: 0 prédio, 1 estrada, 2 passeio, 3 relva ---- */
+  var grid = new Uint8Array(MAP * MAP);
+  function cell(tx, ty) {
+    if (tx < 0 || ty < 0 || tx >= MAP || ty >= MAP) return 0;
+    return grid[ty * MAP + tx];
   }
-
-  function spawnFood() {
-    var p;
-    do { p = {x: rnd(COLS), y: rnd(ROWS)}; }
-    while (snake.some(function (s) { return s.x === p.x && s.y === p.y; }));
-    p.special = Math.random() < 0.15;
-    food = p;
-  }
-  function rnd(n) { return Math.floor(Math.random() * n); }
-
-  function update() {
-    dir = pendingDir;
-    var head = snake[0];
-    var nx = head.x + dir.x, ny = head.y + dir.y;
-    if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS ||
-        snake.some(function (s) { return s.x === nx && s.y === ny; })) {
-      gameOver = true;
-      stopMusic();
-      if (score > best) { best = score; bestEl.textContent = 'Recorde: ' + best;
-        try { localStorage.setItem('snake_best', String(best)); } catch (e) {} }
-      return;
-    }
-    snake.unshift({x:nx, y:ny});
-    if (nx === food.x && ny === food.y) {
-      score += food.special ? 3 : 1;
-      scoreEl.textContent = String(score);
-      spawnFood();
-    } else {
-      snake.pop();
-    }
-  }
-
-  function rr(x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  function drawHammerSickle(cx, cy, r, special) {
-    ctx.lineWidth = r * 0.28;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = special ? '#e8382c' : '#ffd54f';
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.1, cy - r * 0.15, r * 0.7, -Math.PI * 0.1, Math.PI * 0.8);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx + r * 0.45, cy + r * 0.4);
-    ctx.lineTo(cx + r * 0.05, cy + r * 0.85);
-    ctx.stroke();
-    ctx.strokeStyle = special ? '#1a3fc4' : '#ffd54f';
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.7, cy + r * 0.6);
-    ctx.lineTo(cx - r * 0.1, cy - r * 0.1);
-    ctx.stroke();
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.save();
-    ctx.translate(cx - r * 0.15, cy - r * 0.25);
-    ctx.rotate(-Math.PI / 4);
-    ctx.fillRect(-r * 0.5, -r * 0.18, r, r * 0.36);
-    ctx.restore();
-  }
-
-  function star(cx, cy, R) {
-    ctx.beginPath();
-    for (var i = 0; i < 10; i++) {
-      var ang = -Math.PI / 2 + i * Math.PI / 5;
-      var rad = i % 2 === 0 ? R : R * 0.45;
-      var px = cx + rad * Math.cos(ang), py = cy + rad * Math.sin(ang);
-      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
-    }
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  function drawTrumpHead(cx, cy, r) {
-    ctx.fillStyle = '#f7b26a';
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#f5d76e';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy - r * 0.55, r * 1.05, r * 0.5, 0, Math.PI, 0);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx - r * 0.5, cy - r * 0.8, r * 0.55, r * 0.3, -0.35, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx + r * 0.45, cy - r * 0.75, r * 0.45, r * 0.25, 0.3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.35, cy - r * 0.05, r * 0.22, 0, Math.PI * 2);
-    ctx.arc(cx + r * 0.35, cy - r * 0.05, r * 0.22, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1a2a5a';
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.35, cy - r * 0.05, r * 0.1, 0, Math.PI * 2);
-    ctx.arc(cx + r * 0.35, cy - r * 0.05, r * 0.1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#f5d76e';
-    ctx.lineWidth = r * 0.14;
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.6, cy - r * 0.38);
-    ctx.lineTo(cx - r * 0.12, cy - r * 0.3);
-    ctx.moveTo(cx + r * 0.12, cy - r * 0.3);
-    ctx.lineTo(cx + r * 0.6, cy - r * 0.38);
-    ctx.stroke();
-    ctx.strokeStyle = '#b3541f';
-    ctx.lineWidth = r * 0.12;
-    ctx.beginPath();
-    ctx.arc(cx, cy + r * 0.25, r * 0.4, 0.25 * Math.PI, 0.75 * Math.PI);
-    ctx.stroke();
-    ctx.fillStyle = '#6b6b78';
-    rr(cx - r * 1.05, cy - r * 0.95, r * 2.1, r * 0.55, r * 0.25);
-    ctx.fillRect(cx - r * 1.05, cy - r * 0.6, r * 0.3, r * 0.75);
-    ctx.fillRect(cx + r * 0.75, cy - r * 0.6, r * 0.3, r * 0.75);
-    ctx.fillStyle = '#d32f2f';
-    star(cx, cy - r * 0.62, r * 0.22);
-  }
-
-  function draw() {
-    var size = canvas.width;
-    ctx.fillStyle = '#121216';
-    ctx.fillRect(0, 0, size, size);
-
-    ctx.fillStyle = '#1e1e24';
-    for (var x = 0; x < COLS; x++)
-      for (var y = 0; y < ROWS; y++)
-        if ((x + y) % 2 === 0)
-          ctx.fillRect(offsetX + x * cell, offsetY + y * cell, cell, cell);
-
-    ctx.strokeStyle = '#4a4a5a';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(offsetX - 6, offsetY - 6, cell * COLS + 12, cell * ROWS + 12);
-
-    drawHammerSickle(offsetX + food.x * cell + cell / 2, offsetY + food.y * cell + cell / 2, cell / 2.3, food.special);
-
-    for (var i = snake.length - 1; i >= 0; i--) {
-      var p = snake[i];
-      if (i === 0) {
-        drawTrumpHead(offsetX + p.x * cell + cell / 2, offsetY + p.y * cell + cell / 2, cell / 2.1);
-      } else {
-        ctx.fillStyle = '#4caf50';
-        var pad = cell * 0.08;
-        rr(offsetX + p.x * cell + pad, offsetY + p.y * cell + pad,
-           cell - 2 * pad, cell - 2 * pad, cell * 0.2);
+  (function genMap() {
+    for (var ty = 0; ty < MAP; ty++) {
+      for (var tx = 0; tx < MAP; tx++) {
+        var v;
+        if (tx % 6 === 0 || ty % 6 === 0) v = 1;
+        else if (tx % 6 === 1 || tx % 6 === 5 || ty % 6 === 1 || ty % 6 === 5) v = 2;
+        else v = Math.random() < 0.82 ? 0 : 3;
+        grid[ty * MAP + tx] = v;
       }
     }
+  })();
+  var bldColor = [];
+  for (var i = 0; i < MAP * MAP; i++) bldColor.push('hsl(' + Math.floor(Math.random() * 40 + 200) + ',18%,' + Math.floor(Math.random() * 14 + 12) + '%)');
 
-    function center(txt, dy, fs) {
-      ctx.fillStyle = '#fff';
-      ctx.textAlign = 'center';
-      ctx.font = '700 ' + fs + 'px system-ui, sans-serif';
-      ctx.fillText(txt, size / 2, size / 2 + dy);
-    }
+  /* ---- Estado ---- */
+  var player = { x: 3 * TILE, y: 3 * TILE, angle: 0, hp: 100, money: 0, car: null, speed: 0, dead: 0 };
+  var cars = [];
+  var peds = [];
+  var wanted = 0, crimeTimer = 0;
+  var target = null;
+  var keys = {};
+  var deadTimer = 0;
 
-    if (!started) {
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.fillRect(0, 0, size, size);
-      center('SNAKE', -size / 20, size / 15);
-      ctx.font = size / 28 + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#9e9ea6';
-      ctx.fillText('Setas/WASD ou deslize · Toque/Enter para começar', size / 2, size / 2 + size / 15);
-    } else if (gameOver) {
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.fillRect(0, 0, size, size);
-      center('Perdeu miserável!', -size / 20, size / 18);
-      ctx.font = size / 28 + 'px system-ui, sans-serif';
-      ctx.fillStyle = '#9e9ea6';
-      ctx.fillText('Pontos: ' + score, size / 2, size / 2 + size / 30);
-      ctx.fillText('Toque ou Enter para jogar de novo', size / 2, size / 2 + size / 12);
+  function rnd(n) { return Math.floor(Math.random() * n); }
+
+  function intersection() {
+    return { x: (rnd(7) * 6) * TILE + TILE / 2, y: (rnd(7) * 6) * TILE + TILE / 2 };
+  }
+  function newTarget() { target = intersection(); }
+
+  function spawnCar(ai) {
+    var it = intersection();
+    var dirs = [[1, 0], [0, 1]];
+    var d = dirs[rnd(2)];
+    var c = {
+      x: it.x + (d[1] ? (Math.random() < .5 ? -10 : 10) : 0),
+      y: it.y + (d[0] ? (Math.random() < .5 ? -10 : 10) : 0),
+      angle: Math.atan2(d[1], d[0]),
+      speed: 0, max: ai ? 90 + rnd(40) : 260,
+      color: 'hsl(' + rnd(360) + ',70%,55%)',
+      ai: ai, cop: false, dx: d[0], dy: d[1], hp: 100
+    };
+    cars.push(c);
+    return c;
+  }
+  function spawnPed() {
+    var it = intersection();
+    peds.push({ x: it.x + (rnd(3) - 1) * 60, y: it.y + (rnd(3) - 1) * 60,
+                a: rnd(4) * Math.PI / 2, fleeing: 0 });
+  }
+  function spawnCop() {
+    var it = intersection();
+    cars.push({ x: it.x, y: it.y, angle: 0, speed: 0, max: 210,
+                color: 'hsl(220,80%,60%)', cop: true, dx: 1, dy: 0, hp: 100 });
+  }
+  for (i = 0; i < 26; i++) spawnCar(true);
+  for (i = 0; i < 40; i++) spawnPed();
+  newTarget();
+
+  /* ---- Input ---- */
+  window.addEventListener('keydown', function (e) {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key.toLowerCase() === 'e') toggleCar();
+    e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+  function toggleCar() {
+    if (player.dead) return;
+    if (player.car) {
+      var c = player.car;
+      c.ai = false;
+      player.car = null;
+      player.speed = 0;
+      player.x = c.x + Math.cos(c.angle + Math.PI / 2) * 26;
+      player.y = c.y + Math.sin(c.angle + Math.PI / 2) * 26;
+    } else {
+      var best = null, bd = 60;
+      for (i = 0; i < cars.length; i++) {
+        var d = Math.hypot(cars[i].x - player.x, cars[i].y - player.y);
+        if (d < bd) { bd = d; best = cars[i]; }
+      }
+      if (best) {
+        if (best.ai && !best.cop) crime(1);
+        if (best.cop) crime(2);
+        best.ai = false;
+        player.car = best;
+      }
     }
   }
 
-  function loop(t) {
-    if (started && !gameOver && t - lastTick >= TICK_MS) {
-      lastTick = t;
-      update();
+  function crime(n) {
+    wanted = Math.min(5, wanted + n);
+    crimeTimer = 20;
+  }
+
+  /* ---- Helpers ---- */
+  function walkableAt(px, py) {
+    var v = cell(Math.floor(px / TILE), Math.floor(py / TILE));
+    return v !== 0; /* 1 estrada, 2 passeio, 3 relva */
+  }
+  function driveableAt(px, py) { return cell(Math.floor(px / TILE), Math.floor(py / TILE)) === 1; }
+
+  function moveCar(c, dt) {
+    var nx = c.x + Math.cos(c.angle) * c.speed * dt;
+    var ny = c.y + Math.sin(c.angle) * c.speed * dt;
+    var ahead = cell(Math.floor((nx + Math.cos(c.angle) * 14) / TILE), Math.floor((ny + Math.sin(c.angle) * 14) / TILE));
+    if (ahead === 0) {
+      if (c === player.car) {
+        player.hp -= Math.abs(c.speed) / 12;
+        if (player.hp <= 0) die();
+      }
+      c.speed *= -0.3;
+      return;
     }
+    c.x = nx; c.y = ny;
+  }
+
+  function die() {
+    if (player.dead) return;
+    player.dead = 1;
+    deadTimer = 3;
+    if (player.car) { player.car.speed = 0; }
+  }
+
+  function respawn() {
+    player.dead = 0;
+    player.hp = 100;
+    player.car = null;
+    player.money = Math.floor(player.money / 2);
+    wanted = 0;
+    player.x = 3 * TILE; player.y = 3 * TILE;
+  }
+
+  /* ---- Update ---- */  var last = 0;
+  function loop(t) {
+    var dt = Math.min(0.05, (t - last) / 1000 || 0.016);
+    last = t;
+    update(dt);
     draw();
     requestAnimationFrame(loop);
   }
 
-  function setDir(dx, dy) {
-    if (dx !== -dir.x || dy !== -dir.y) pendingDir = {x:dx, y:dy};
-  }
+  function update(dt) {
+    if (player.dead) {
+      deadTimer -= dt;
+      if (deadTimer <= 0) respawn();
+      return;
+    }
 
-  function startOrRestart() {
-    if (!started || gameOver) {
-      if (gameOver) reset();
-      started = true;
-      startMusic();
+    /* jogador */
+    if (player.car) {
+      var c = player.car;
+      if (keys['w']) c.speed += 300 * dt;
+      if (keys['s']) c.speed -= 380 * dt;
+      if (keys[' ']) c.speed *= 1 - 3 * dt;
+      c.speed *= 1 - 0.7 * dt;
+      c.speed = Math.max(-120, Math.min(c.max, c.speed));
+      var steer = (keys['a'] ? -1 : 0) + (keys['d'] ? 1 : 0);
+      c.angle += steer * dt * 2.4 * (c.speed / 140);
+      moveCar(c, dt);
+      player.x = c.x; player.y = c.y; player.angle = c.angle;
+      /* atropelamentos */
+      for (i = 0; i < peds.length; i++) {
+        var p = peds[i];
+        if (Math.abs(c.speed) > 40 && Math.hypot(p.x - c.x, p.y - c.y) < 18) {
+          peds.splice(i, 1); i--; crime(1); player.money += 10;
+        }
+      }
+    } else {
+      var sp = 130;
+      var vx = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+      var vy = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
+      var l = Math.hypot(vx, vy) || 1;
+      var npx = player.x + vx / l * sp * dt;
+      var npy = player.y + vy / l * sp * dt;
+      if (walkableAt(npx, player.y) && walkableAt(npx, player.y)) player.x = npx;
+      if (walkableAt(player.x, npy)) player.y = npy;
+      if (vx || vy) player.angle = Math.atan2(vy, vx);
+    }
+
+    /* trânsito AI */
+    for (i = 0; i < cars.length; i++) {
+      var c = cars[i];
+      if (c === player.car) continue;
+      if (c.cop) {
+        /* polícia: persegue */
+        var dx = player.x - c.x, dy = player.y - c.y;
+        var want = Math.atan2(dy, dx);
+        var diff = want - c.angle;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        c.angle += Math.max(-2.5 * dt, Math.min(2.5 * dt, diff));
+        c.speed += 260 * dt;
+        c.speed = Math.min(c.max, c.speed);
+        if (Math.hypot(dx, dy) < 34 && !player.dead) {
+          player.hp -= 14 * dt;
+          if (player.hp <= 0) die();
+        }
+        moveCar(c, dt);
+        continue;
+      }
+      if (!c.ai) { c.speed = 0; continue; }
+      c.speed = Math.min(c.max, c.speed + 90 * dt);
+      /* trava se houver carro à frente */
+      for (var j = 0; j < cars.length; j++) {
+        var o = cars[j];
+        if (o === c) continue;
+        var fx = c.x + Math.cos(c.angle) * 34, fy = c.y + Math.sin(c.angle) * 34;
+        if (Math.hypot(o.x - fx, o.y - fy) < 20) { c.speed = 0; break; }
+      }
+      /* interseções: vira aleatoriamente */
+      var tx = Math.floor(c.x / TILE), ty = Math.floor(c.y / TILE);
+      if (tx % 6 === 0 && ty % 6 === 0 && Math.random() < 0.6) {
+        var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        var d2 = dirs[rnd(4)];
+        c.angle = Math.atan2(d2[1], d2[0]);
+      }
+      moveCar(c, dt);
+      /* AI fora do mapa volta ao centro */
+      if (c.x < TILE || c.y < TILE || c.x > (MAP - 1) * TILE || c.y > (MAP - 1) * TILE) {
+        c.x = 3 * TILE; c.y = 3 * TILE; c.speed = 0;
+      }
+    }
+
+    /* peões */
+    for (i = 0; i < peds.length; i++) {
+      var p = peds[i];
+      var near = false;
+      for (var j2 = 0; j2 < cars.length; j2++) {
+        if (Math.hypot(cars[j2].x - p.x, cars[j2].y - p.y) < 34 && Math.abs(cars[j2].speed) > 60) near = true;
+      }
+      if (near) { p.fleeing = 2; p.a = Math.random() * Math.PI * 2; }
+      var pspeed = p.fleeing > 0 ? 90 : 26;
+      if (p.fleeing > 0) p.fleeing -= dt;
+      var px2 = p.x + Math.cos(p.a) * pspeed * dt;
+      var py2 = p.y + Math.sin(p.a) * pspeed * dt;
+      if (cell(Math.floor(px2 / TILE), Math.floor(py2 / TILE)) === 0 || Math.random() < 0.01) {
+        p.a += Math.PI / 2 + Math.random() * Math.PI;
+      } else { p.x = px2; p.y = py2; }
+    }
+    while (peds.length < 40) spawnPed();
+
+    /* procurado decai */
+    if (wanted > 0) {
+      crimeTimer -= dt;
+      if (crimeTimer <= 0 && !player.car) { wanted--; crimeTimer = 10; }
+    }
+    /* polícia proporcional */
+    var copCount = 0;
+    for (i = 0; i < cars.length; i++) if (cars[i].cop) copCount++;
+    if (copCount < wanted && Math.random() < dt * 2) spawnCop();
+    while (copCount > wanted) {
+      for (i = 0; i < cars.length; i++) if (cars[i].cop) { cars.splice(i, 1); break; }
+      copCount--;
+    }
+
+    /* missão de entrega */
+    if (Math.hypot(player.x - target.x, player.y - target.y) < 46) {
+      player.money += 150;
+      newTarget();
+      document.getElementById('help').innerHTML = 'Entrega completa: +$150 · Nova entrega marcada no minimapa<br><a href="snake.html">Jogar Snake →</a>';
+      setTimeout(function () { document.getElementById('help').innerHTML = 'WASD mover/conduzir · E entrar/sair do carro · Espaço travão de mão · Objetivo: entregas amarelas · Evita a polícia<br><a href="snake.html">Jogar Snake →</a>'; }, 2500);
     }
   }
 
-  document.addEventListener('keydown', function (e) {
-    var k = e.key;
-    if (k === 'ArrowUp' || k === 'w' || k === 'W') setDir(0, -1);
-    else if (k === 'ArrowDown' || k === 's' || k === 'S') setDir(0, 1);
-    else if (k === 'ArrowLeft' || k === 'a' || k === 'A') setDir(-1, 0);
-    else if (k === 'ArrowRight' || k === 'd' || k === 'D') setDir(1, 0);
-    else if (k === 'Enter' || k === ' ') startOrRestart();
-    else return;
-    e.preventDefault();
-  });
+  /* ---- Draw ---- */
+  function draw() {
+    var w = canvas.width, h = canvas.height;
+    var camX = player.x - w / 2, camY = player.y - h / 2;
+    ctx.fillStyle = '#15151a';
+    ctx.fillRect(0, 0, w, h);
 
-  var tx = 0, ty = 0;
-  canvas.addEventListener('touchstart', function (e) {
-    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
-  }, {passive: true});
-  canvas.addEventListener('touchend', function (e) {
-    var dx = e.changedTouches[0].clientX - tx;
-    var dy = e.changedTouches[0].clientY - ty;
-    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) { startOrRestart(); return; }
-    if (Math.abs(dx) > Math.abs(dy)) setDir(dx > 0 ? 1 : -1, 0);
-    else setDir(0, dy > 0 ? 1 : -1);
-  }, {passive: true});
+    var x0 = Math.floor(camX / TILE), y0 = Math.floor(camY / TILE);
+    var x1 = x0 + Math.ceil(w / TILE) + 1, y1 = y0 + Math.ceil(h / TILE) + 1;
+    for (var ty = y0; ty <= y1; ty++) {
+      for (var tx = x0; tx <= x1; tx++) {
+        var v = cell(tx, ty);
+        if (v === 0) {
+          if (tx < 0 || ty < 0 || tx >= MAP || ty >= MAP) { ctx.fillStyle = '#0a0a0d'; }
+          else ctx.fillStyle = bldColor[ty * MAP + tx];
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+          ctx.strokeRect(tx * TILE - camX + .5, ty * TILE - camY + .5, TILE - 1, TILE - 1);
+        } else if (v === 1) {
+          ctx.fillStyle = '#33343c';
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+          if (tx % 6 === 0 && ty % 6 !== 0) { ctx.fillStyle = '#e8b431'; ctx.fillRect(tx * TILE + TILE / 2 - camX, ty * TILE - camY, 2, TILE); }
+          if (ty % 6 === 0 && tx % 6 !== 0) { ctx.fillStyle = '#e8b431'; ctx.fillRect(tx * TILE - camX, ty * TILE + TILE / 2 - camY, TILE, 2); }
+        } else if (v === 2) {
+          ctx.fillStyle = '#4a4a52';
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+        } else {
+          ctx.fillStyle = '#2e5c2e';
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+        }
+      }
+    }
 
-  canvas.addEventListener('mousedown', function () { startOrRestart(); });
+    /* destino */
+    ctx.fillStyle = 'rgba(255,213,0,0.35)';
+    ctx.beginPath();
+    ctx.arc(target.x - camX, target.y - camY, 26 + Math.sin(Date.now() / 300) * 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffd500';
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
-  bestEl.textContent = 'Recorde: ' + best;
-  resize();
-  reset();
+    /* carros */
+    for (var i = 0; i < cars.length; i++) {
+      var c = cars[i];
+      var sx = c.x - camX, sy = c.y - camY;
+      if (sx < -60 || sy < -60 || sx > w + 60 || sy > h + 60) continue;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(c.angle);
+      ctx.fillStyle = c.cop ? (Math.floor(Date.now() / 250) % 2 ? '#2196f3' : '#e53935') : c.color;
+      ctx.fillRect(-14, -8, 28, 16);
+      ctx.fillStyle = 'rgba(20,20,30,0.9)';
+      ctx.fillRect(-4, -6, 10, 12);
+      ctx.restore();
+    }
+
+    /* peões */
+    ctx.fillStyle = '#e0c49a';
+    for (i = 0; i < peds.length; i++) {
+      var p = peds[i];
+      var sx = p.x - camX, sy = p.y - camY;
+      if (sx < 0 || sy < 0 || sx > w || sy > h) continue;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /* jogador */
+    if (!player.car) {
+      ctx.fillStyle = '#4caf50';
+      ctx.beginPath();
+      ctx.arc(player.x - camX, player.y - camY, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /* HUD */
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(w - 190, 12, 178, 74);
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 20px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + player.money, w - 20, 40);
+    ctx.fillStyle = '#ffd500';
+    var stars = '';
+    for (i = 0; i < 5; i++) stars += i < wanted ? '★' : '☆';
+    ctx.fillText(stars, w - 20, 66);
+    /* vida */
+    ctx.fillStyle = '#444';
+    ctx.fillRect(w - 170, 74, 150, 8);
+    ctx.fillStyle = player.hp > 30 ? '#4caf50' : '#e53935';
+    ctx.fillRect(w - 170, 74, 150 * Math.max(0, player.hp) / 100, 8);
+    ctx.textAlign = 'left';
+
+    /* minimapa */
+    var mm = 150, scale = mm / (MAP * TILE);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(12, 12, mm, mm);
+    ctx.fillStyle = '#55565e';
+    for (ty = 0; ty < MAP; ty++)
+      for (tx = 0; tx < MAP; tx++)
+        if (cell(tx, ty) === 1)
+          ctx.fillRect(12 + tx * scale, 12 + ty * scale, Math.ceil(scale), Math.ceil(scale));
+    ctx.fillStyle = '#ffd500';
+    ctx.fillRect(12 + target.x * scale - 2, 12 + target.y * scale - 2, 5, 5);
+    ctx.fillStyle = '#e53935';
+    for (i = 0; i < cars.length; i++)
+      if (cars[i].cop) ctx.fillRect(12 + cars[i].x * scale - 1.5, 12 + cars[i].y * scale - 1.5, 4, 4);
+    ctx.fillStyle = '#4caf50';
+    ctx.fillRect(12 + player.x * scale - 2, 12 + player.y * scale - 2, 5, 5);
+
+    /* morte */
+    if (player.dead) {
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#e53935';
+      ctx.font = '700 ' + Math.min(w / 8, 64) + 'px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('WASTED', w / 2, h / 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
   requestAnimationFrame(loop);
 })();
 </script>
