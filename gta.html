@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crime City</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #000; overflow: hidden; }
+  body { font-family: system-ui, sans-serif; color: #fff; user-select: none; }
+  canvas { display: block; }
+  #help { position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+          font-size: 12px; color: #9e9ea6; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="help">WASD mover/conduzir · E entrar/sair do carro · Espaço travão de mão · Objetivo: entregas amarelas · Evita a polícia</div>
+<script>
+(function () {
+  var TILE = 40, MAP = 48, VIEW = 480;
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* ---- Mapa: 0 prédio, 1 estrada, 2 passeio, 3 relva ---- */
+  var grid = new Uint8Array(MAP * MAP);
+  function cell(tx, ty) {
+    if (tx < 0 || ty < 0 || tx >= MAP || ty >= MAP) return 0;
+    return grid[ty * MAP + tx];
+  }
+  (function genMap() {
+    for (var ty = 0; ty < MAP; ty++) {
+      for (var tx = 0; tx < MAP; tx++) {
+        var v;
+        if (tx % 6 === 0 || ty % 6 === 0) v = 1;
+        else if (tx % 6 === 1 || tx % 6 === 5 || ty % 6 === 1 || ty % 6 === 5) v = 2;
+        else v = Math.random() < 0.82 ? 0 : 3;
+        grid[ty * MAP + tx] = v;
+      }
+    }
+  })();
+  var bldColor = [];
+  for (var i = 0; i < MAP * MAP; i++) bldColor.push('hsl(' + Math.floor(Math.random() * 40 + 200) + ',18%,' + Math.floor(Math.random() * 14 + 12) + '%)');
+
+  /* ---- Estado ---- */
+  var player = { x: 3 * TILE, y: 3 * TILE, angle: 0, hp: 100, money: 0, car: null, speed: 0, dead: 0 };
+  var cars = [];
+  var peds = [];
+  var wanted = 0, crimeTimer = 0;
+  var target = null;
+  var keys = {};
+  var deadTimer = 0;
+
+  function rnd(n) { return Math.floor(Math.random() * n); }
+
+  function intersection() {
+    return { x: (rnd(7) * 6) * TILE + TILE / 2, y: (rnd(7) * 6) * TILE + TILE / 2 };
+  }
+  function newTarget() { target = intersection(); }
+
+  function spawnCar(ai) {
+    var it = intersection();
+    var dirs = [[1, 0], [0, 1]];
+    var d = dirs[rnd(2)];
+    var c = {
+      x: it.x + (d[1] ? (Math.random() < .5 ? -10 : 10) : 0),
+      y: it.y + (d[0] ? (Math.random() < .5 ? -10 : 10) : 0),
+      angle: Math.atan2(d[1], d[0]),
+      speed: 0, max: ai ? 90 + rnd(40) : 260,
+      color: 'hsl(' + rnd(360) + ',70%,55%)',
+      ai: ai, cop: false, dx: d[0], dy: d[1], hp: 100
+    };
+    cars.push(c);
+    return c;
+  }
+  function spawnPed() {
+    var it = intersection();
+    peds.push({ x: it.x + (rnd(3) - 1) * 60, y: it.y + (rnd(3) - 1) * 60,
+                a: rnd(4) * Math.PI / 2, fleeing: 0 });
+  }
+  function spawnCop() {
+    var it = intersection();
+    cars.push({ x: it.x, y: it.y, angle: 0, speed: 0, max: 210,
+                color: 'hsl(220,80%,60%)', cop: true, dx: 1, dy: 0, hp: 100 });
+  }
+  for (i = 0; i < 26; i++) spawnCar(true);
+  for (i = 0; i < 40; i++) spawnPed();
+  newTarget();
+
+  /* ---- Input ---- */
+  window.addEventListener('keydown', function (e) {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key.toLowerCase() === 'e') toggleCar();
+    e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+  function toggleCar() {
+    if (player.dead) return;
+    if (player.car) {
+      var c = player.car;
+      c.ai = false;
+      player.car = null;
+      player.speed = 0;
+      player.x = c.x + Math.cos(c.angle + Math.PI / 2) * 26;
+      player.y = c.y + Math.sin(c.angle + Math.PI / 2) * 26;
+    } else {
+      var best = null, bd = 60;
+      for (i = 0; i < cars.length; i++) {
+        var d = Math.hypot(cars[i].x - player.x, cars[i].y - player.y);
+        if (d < bd) { bd = d; best = cars[i]; }
+      }
+      if (best) {
+        if (best.ai && !best.cop) crime(1);
+        if (best.cop) crime(2);
+        best.ai = false;
+        player.car = best;
+      }
+    }
+  }
+
+  function crime(n) {
+    wanted = Math.min(5, wanted + n);
+    crimeTimer = 20;
+  }
+
+  /* ---- Helpers ---- */
+  function walkableAt(px, py) {
+    var v = cell(Math.floor(px / TILE), Math.floor(py / TILE));
+    return v !== 0; /* 1 estrada, 2 passeio, 3 relva */
+  }
+  function driveableAt(px, py) { return cell(Math.floor(px / TILE), Math.floor(py / TILE)) === 1; }
+
+  function moveCar(c, dt) {
+    var nx = c.x + Math.cos(c.angle) * c.speed * dt;
+    var ny = c.y + Math.sin(c.angle) * c.speed * dt;
+    var ahead = cell(Math.floor((nx + Math.cos(c.angle) * 14) / TILE), Math.floor((ny + Math.sin(c.angle) * 14) / TILE));
+    if (ahead === 0) {
+      if (c === player.car) {
+        player.hp -= Math.abs(c.speed) / 12;
+        if (player.hp <= 0) die();
+      }
+      c.speed *= -0.3;
+      return;
+    }
+    c.x = nx; c.y = ny;
+  }
+
+  function die() {
+    if (player.dead) return;
+    player.dead = 1;
+    deadTimer = 3;
+    if (player.car) { player.car.speed = 0; }
+  }
+
+  function respawn() {
+    player.dead = 0;
+    player.hp = 100;
+    player.car = null;
+    player.money = Math.floor(player.money / 2);
+    wanted = 0;
+    player.x = 3 * TILE; player.y = 3 * TILE;
+  }
+
+  /* ---- Update ---- */  var last = 0;
+  function loop(t) {
+    var dt = Math.min(0.05, (t - last) / 1000 || 0.016);
+    last = t;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt) {
+    if (player.dead) {
+      deadTimer -= dt;
+      if (deadTimer <= 0) respawn();
+      return;
+    }
+
+    /* jogador */
+    if (player.car) {
+      var c = player.car;
+      if (keys['w']) c.speed += 300 * dt;
+      if (keys['s']) c.speed -= 380 * dt;
+      if (keys[' ']) c.speed *= 1 - 3 * dt;
+      c.speed *= 1 - 0.7 * dt;
+      c.speed = Math.max(-120, Math.min(c.max, c.speed));
+      var steer = (keys['a'] ? -1 : 0) + (keys['d'] ? 1 : 0);
+      c.angle += steer * dt * 2.4 * (c.speed / 140);
+      moveCar(c, dt);
+      player.x = c.x; player.y = c.y; player.angle = c.angle;
+      /* atropelamentos */
+      for (i = 0; i < peds.length; i++) {
+        var p = peds[i];
+        if (Math.abs(c.speed) > 40 && Math.hypot(p.x - c.x, p.y - c.y) < 18) {
+          peds.splice(i, 1); i--; crime(1); player.money += 10;
+        }
+      }
+    } else {
+      var sp = 130;
+      var vx = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+      var vy = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
+      var l = Math.hypot(vx, vy) || 1;
+      var npx = player.x + vx / l * sp * dt;
+      var npy = player.y + vy / l * sp * dt;
+      if (walkableAt(npx, player.y) && walkableAt(npx, player.y)) player.x = npx;
+      if (walkableAt(player.x, npy)) player.y = npy;
+      if (vx || vy) player.angle = Math.atan2(vy, vx);
+    }
+
+    /* trânsito AI */
+    for (i = 0; i < cars.length; i++) {
+      var c = cars[i];
+      if (c === player.car) continue;
+      if (c.cop) {
+        /* polícia: persegue */
+        var dx = player.x - c.x, dy = player.y - c.y;
+        var want = Math.atan2(dy, dx);
+        var diff = want - c.angle;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        c.angle += Math.max(-2.5 * dt, Math.min(2.5 * dt, diff));
+        c.speed += 260 * dt;
+        c.speed = Math.min(c.max, c.speed);
+        if (Math.hypot(dx, dy) < 34 && !player.dead) {
+          player.hp -= 14 * dt;
+          if (player.hp <= 0) die();
+        }
+        moveCar(c, dt);
+        continue;
+      }
+      if (!c.ai) { c.speed = 0; continue; }
+      c.speed = Math.min(c.max, c.speed + 90 * dt);
+      /* trava se houver carro à frente */
+      for (var j = 0; j < cars.length; j++) {
+        var o = cars[j];
+        if (o === c) continue;
+        var fx = c.x + Math.cos(c.angle) * 34, fy = c.y + Math.sin(c.angle) * 34;
+        if (Math.hypot(o.x - fx, o.y - fy) < 20) { c.speed = 0; break; }
+      }
+      /* interseções: vira aleatoriamente */
+      var tx = Math.floor(c.x / TILE), ty = Math.floor(c.y / TILE);
+      if (tx % 6 === 0 && ty % 6 === 0 && Math.random() < 0.6) {
+        var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        var d2 = dirs[rnd(4)];
+        c.angle = Math.atan2(d2[1], d2[0]);
+      }
+      moveCar(c, dt);
+      /* AI fora do mapa volta ao centro */
+      if (c.x < TILE || c.y < TILE || c.x > (MAP - 1) * TILE || c.y > (MAP - 1) * TILE) {
+        c.x = 3 * TILE; c.y = 3 * TILE; c.speed = 0;
+      }
+    }
+
+    /* peões */
+    for (i = 0; i < peds.length; i++) {
+      var p = peds[i];
+      var near = false;
+      for (var j2 = 0; j2 < cars.length; j2++) {
+        if (Math.hypot(cars[j2].x - p.x, cars[j2].y - p.y) < 34 && Math.abs(cars[j2].speed) > 60) near = true;
+      }
+      if (near) { p.fleeing = 2; p.a = Math.random() * Math.PI * 2; }
+      var pspeed = p.fleeing > 0 ? 90 : 26;
+      if (p.fleeing > 0) p.fleeing -= dt;
+      var px2 = p.x + Math.cos(p.a) * pspeed * dt;
+      var py2 = p.y + Math.sin(p.a) * pspeed * dt;
+      if (cell(Math.floor(px2 / TILE), Math.floor(py2 / TILE)) === 0 || Math.random() < 0.01) {
+        p.a += Math.PI / 2 + Math.random() * Math.PI;
+      } else { p.x = px2; p.y = py2; }
+    }
+    while (peds.length < 40) spawnPed();
+
+    /* procurado decai */
+    if (wanted > 0) {
+      crimeTimer -= dt;
+      if (crimeTimer <= 0 && !player.car) { wanted--; crimeTimer = 10; }
+    }
+    /* polícia proporcional */
+    var copCount = 0;
+    for (i = 0; i < cars.length; i++) if (cars[i].cop) copCount++;
+    if (copCount < wanted && Math.random() < dt * 2) spawnCop();
+    while (copCount > wanted) {
+      for (i = 0; i < cars.length; i++) if (cars[i].cop) { cars.splice(i, 1); break; }
+      copCount--;
+    }
+
+    /* missão de entrega */
+    if (Math.hypot(player.x - target.x, player.y - target.y) < 46) {
+      player.money += 150;
+      newTarget();
+      document.getElementById('help').textContent = 'Entrega completa: +$150 · Nova entrega marcada no minimapa';
+      setTimeout(function () { document.getElementById('help').textContent = 'WASD mover/conduzir · E entrar/sair do carro · Espaço travão de mão · Objetivo: entregas amarelas · Evita a polícia'; }, 2500);
+    }
+  }
+
+  /* ---- Draw ---- */
+  function draw() {
+    var w = canvas.width, h = canvas.height;
+    var camX = player.x - w / 2, camY = player.y - h / 2;
+    ctx.fillStyle = '#15151a';
+    ctx.fillRect(0, 0, w, h);
+
+    var x0 = Math.floor(camX / TILE), y0 = Math.floor(camY / TILE);
+    var x1 = x0 + Math.ceil(w / TILE) + 1, y1 = y0 + Math.ceil(h / TILE) + 1;
+    for (var ty = y0; ty <= y1; ty++) {
+      for (var tx = x0; tx <= x1; tx++) {
+        var v = cell(tx, ty);
+        if (v === 0) {
+          if (tx < 0 || ty < 0 || tx >= MAP || ty >= MAP) { ctx.fillStyle = '#0a0a0d'; }
+          else ctx.fillStyle = bldColor[ty * MAP + tx];
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+          ctx.strokeRect(tx * TILE - camX + .5, ty * TILE - camY + .5, TILE - 1, TILE - 1);
+        } else if (v === 1) {
+          ctx.fillStyle = '#33343c';
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+          if (tx % 6 === 0 && ty % 6 !== 0) { ctx.fillStyle = '#e8b431'; ctx.fillRect(tx * TILE + TILE / 2 - camX, ty * TILE - camY, 2, TILE); }
+          if (ty % 6 === 0 && tx % 6 !== 0) { ctx.fillStyle = '#e8b431'; ctx.fillRect(tx * TILE - camX, ty * TILE + TILE / 2 - camY, TILE, 2); }
+        } else if (v === 2) {
+          ctx.fillStyle = '#4a4a52';
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+        } else {
+          ctx.fillStyle = '#2e5c2e';
+          ctx.fillRect(tx * TILE - camX, ty * TILE - camY, TILE, TILE);
+        }
+      }
+    }
+
+    /* destino */
+    ctx.fillStyle = 'rgba(255,213,0,0.35)';
+    ctx.beginPath();
+    ctx.arc(target.x - camX, target.y - camY, 26 + Math.sin(Date.now() / 300) * 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffd500';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    /* carros */
+    for (var i = 0; i < cars.length; i++) {
+      var c = cars[i];
+      var sx = c.x - camX, sy = c.y - camY;
+      if (sx < -60 || sy < -60 || sx > w + 60 || sy > h + 60) continue;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(c.angle);
+      ctx.fillStyle = c.cop ? (Math.floor(Date.now() / 250) % 2 ? '#2196f3' : '#e53935') : c.color;
+      ctx.fillRect(-14, -8, 28, 16);
+      ctx.fillStyle = 'rgba(20,20,30,0.9)';
+      ctx.fillRect(-4, -6, 10, 12);
+      ctx.restore();
+    }
+
+    /* peões */
+    ctx.fillStyle = '#e0c49a';
+    for (i = 0; i < peds.length; i++) {
+      var p = peds[i];
+      var sx = p.x - camX, sy = p.y - camY;
+      if (sx < 0 || sy < 0 || sx > w || sy > h) continue;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /* jogador */
+    if (!player.car) {
+      ctx.fillStyle = '#4caf50';
+      ctx.beginPath();
+      ctx.arc(player.x - camX, player.y - camY, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /* HUD */
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(w - 190, 12, 178, 74);
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 20px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + player.money, w - 20, 40);
+    ctx.fillStyle = '#ffd500';
+    var stars = '';
+    for (i = 0; i < 5; i++) stars += i < wanted ? '★' : '☆';
+    ctx.fillText(stars, w - 20, 66);
+    /* vida */
+    ctx.fillStyle = '#444';
+    ctx.fillRect(w - 170, 74, 150, 8);
+    ctx.fillStyle = player.hp > 30 ? '#4caf50' : '#e53935';
+    ctx.fillRect(w - 170, 74, 150 * Math.max(0, player.hp) / 100, 8);
+    ctx.textAlign = 'left';
+
+    /* minimapa */
+    var mm = 150, scale = mm / (MAP * TILE);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(12, 12, mm, mm);
+    ctx.fillStyle = '#55565e';
+    for (ty = 0; ty < MAP; ty++)
+      for (tx = 0; tx < MAP; tx++)
+        if (cell(tx, ty) === 1)
+          ctx.fillRect(12 + tx * scale, 12 + ty * scale, Math.ceil(scale), Math.ceil(scale));
+    ctx.fillStyle = '#ffd500';
+    ctx.fillRect(12 + target.x * scale - 2, 12 + target.y * scale - 2, 5, 5);
+    ctx.fillStyle = '#e53935';
+    for (i = 0; i < cars.length; i++)
+      if (cars[i].cop) ctx.fillRect(12 + cars[i].x * scale - 1.5, 12 + cars[i].y * scale - 1.5, 4, 4);
+    ctx.fillStyle = '#4caf50';
+    ctx.fillRect(12 + player.x * scale - 2, 12 + player.y * scale - 2, 5, 5);
+
+    /* morte */
+    if (player.dead) {
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#e53935';
+      ctx.font = '700 ' + Math.min(w / 8, 64) + 'px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('WASTED', w / 2, h / 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
